@@ -5,9 +5,9 @@
 # Maintainer:
 # Created: Fri Jan 29 11:43:15 2016 (+0530)
 # Version:
-# Last-Updated: Wed Sep 09 01:32:12 2020 (+0530)
-#           By: HarshaRani
-#     Update #: 0
+# Last-Updated: Thu Nov 28 13:28:27 2024 (+0530)
+#           By: Subhasis Ray
+#     Update #: 1
 # URL:
 # Keywords:
 # Compatibility:
@@ -37,8 +37,8 @@
 # General Public License for more details.
 #
 try:
-    import sbml
-except Exception as e:
+    import libsbml as sbml
+except:
     print( "[INFO ] Failed to import sbml. Quitting.. \nThis module can be installed by using `pip` in terminal:\n\t $ pip install python-libsbml --user" )
     quit()
 import sys
