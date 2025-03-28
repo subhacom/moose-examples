@@ -6,9 +6,9 @@
 # Maintainer:
 # Created: Tue May  7 12:11:22 2013 (+0530)
 # Version:
-# Last-Updated: Thu Mar 27 14:56:59 2025 (+0530)
+# Last-Updated: Fri Mar 28 11:58:30 2025 (+0530)
 #           By: Subhasis Ray
-#     Update #: 338
+#     Update #: 441
 # URL:
 # Keywords:
 # Compatibility:
@@ -41,6 +41,13 @@
 # the Free Software Foundation, Inc., 51 Franklin Street, Fifth
 # Floor, Boston, MA 02110-1301, USA.
 
+"""This reimplements the Hodgkin-Huxley squid giant axon model using
+formula evaluation to fill up the HHGates.
+
+"""
+
+import sys
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -55,44 +62,45 @@ def create_na_chan(
     parent='/library', name='na', vmin=-110e-3, vmax=50e-3, vdivs=3000
 ):
     """
-    Create a Hodhkin-Huxley Na channel under `parent`.
+    Create a Hodgkin-Huxley Na channel under `parent`.
 
     vmin, vmax, vdivs: voltage range and number of divisions for gate tables
 
     """
-    na = moose.HHChannel(f'{parent}/{name}')
+    na = moose.HHChannel('%s/%s' % (parent, name))
     na.Xpower = 3
     na.Ypower = 1
-    v = np.linspace(vmin, vmax, vdivs + 1) - EREST_ACT
-    m_alpha = (
-        per_ms * (25 - v * 1e3) / (10 * (np.exp((25 - v * 1e3) / 10) - 1))
-    )
-    m_beta = per_ms * 4 * np.exp(-v * 1e3 / 18)
-    m_gate = moose.element(f'{na.path}/gateX')
-    m_gate.min = vmin
-    m_gate.max = vmax
-    m_gate.divs = vdivs
-    m_gate.tableA = m_alpha
-    m_gate.tableB = m_alpha + m_beta
-    h_alpha = per_ms * 0.07 * np.exp(-v / 20e-3)
-    h_beta = per_ms * 1 / (np.exp((30e-3 - v) / 10e-3) + 1)
-    h_gate = moose.element(f'{na.path}/gateY')
-    h_gate.min = vmin
-    h_gate.max = vmax
-    h_gate.divs = vdivs
-    h_gate.tableA = h_alpha
-    h_gate.tableB = h_alpha + h_beta
-    plt.subplot(2, 1, 1)
-    v += EREST_ACT
-    plt.plot(v, m_alpha / (m_alpha + m_beta), label='m_inf')
-    plt.plot(v, h_alpha / (h_alpha + h_beta), label='h_inf')
+    m_gate = moose.element('%s/gateX' % (na.path))
+    m_gate.alphaExpr = (f'1e3 * 0.1 * (25 - 1e3 * (v - ({EREST_ACT}))) /'
+                        f'(exp((25 - 1e3 * (v - ({EREST_ACT}))) / 10) - 1)')
+    v = np.linspace(vmin, vmax, vdivs+1)
+    alpha = (1e3 * 0.1 * (25 - 1e3*(v - EREST_ACT)) /
+             (np.exp((25 - 1e3 * (v - EREST_ACT)) / 10) - 1))
+    m_gate.betaExpr = f'1e3 * 4 * exp(- (v - ({EREST_ACT}))/ 18e-3)'
+    beta = 1e3 * 4 * np.exp(- 1e3 * (v - EREST_ACT)/ 18)
+    h_gate = moose.element('%s/gateY' % (na.path))
+    h_gate.alphaExpr = f'1e3 * 0.07 * exp(- 1e3 * (v - ({EREST_ACT}))/ 20)'
+    h_gate.betaExpr = f'1e3 / (exp((30 - 1e3 * (v - ({EREST_ACT}))) / 10) + 1)'
+    for gate in (m_gate, h_gate):
+        gate.min = vmin
+        gate.max = vmax
+        gate.divs = vdivs
+        gate.useInterpolation = True
+        gate.fillFromExpr()
+
+    v = np.linspace(m_gate.min, m_gate.max, m_gate.divs + 1)
+    plt.subplot(211)
+    plt.plot(v, m_gate.tableA / m_gate.tableB, label='minf moose')
+    plt.plot(v, alpha/(alpha+beta), '--', label='minf numpy')
+    plt.plot(v, h_gate.tableA / h_gate.tableB, label='hinf moose')
     plt.legend()
-    plt.subplot(2, 1, 2)
-    plt.plot(v, 1 / (m_alpha + m_beta), label='tau_m')
-    plt.plot(v, 1 / (h_alpha + h_beta), label='tau_h')
+    plt.subplot(212)
+    plt.plot(v, 1 / m_gate.tableB, label='mtau moose')
+    plt.plot(v, 1/(alpha+beta), '--', label='mtau numpy')
+    plt.plot(v, 1 / h_gate.tableB, label='htau moose')
     plt.legend()
     plt.show()
-    plt.close()
+
     na.tick = -1
     return na
 
@@ -105,25 +113,30 @@ def create_k_chan(
     vmin, vmax, vdivs: voltage range and number of divisions for gate tables
 
     """
-    k = moose.HHChannel(f'{parent}/{name}')
+    k = moose.HHChannel('%s/%s' % (parent, name))
     k.Xpower = 4
-    v = np.linspace(vmin, vmax, vdivs + 1) - EREST_ACT
-    n_alpha = (
-        per_ms * (10 - v * 1e3) / (100 * (np.exp((10 - v * 1e3) / 10) - 1))
-    )
-    n_beta = per_ms * 0.125 * np.exp(-v * 1e3 / 80)
-    n_gate = moose.element(f'{k.path}/gateX')
-    n_gate.min = vmin
-    n_gate.max = vmax
-    n_gate.divs = vdivs
-    n_gate.tableA = n_alpha
-    n_gate.tableB = n_alpha + n_beta
+    n_gate = moose.element('%s/gateX' % (k.path))
+    n_gate.alphaExpr = (f'1e3 * 0.01 * (10 - 1e3 * (v - ({EREST_ACT}))) /'
+                        f'(exp((10 - 1e3 * (v - ({EREST_ACT})))/10) - 1)')
+    n_gate.betaExpr = f'1e3 * 0.125 * exp(-1e3 * (v - ({EREST_ACT})) / 80)'
+    n_gate.min = -100e-3
+    n_gate.max = 100e-3
+    n_gate.divs = 1000
+    n_gate.useInterpolation = True
+    n_gate.fillFromExpr()
+    v = np.linspace(n_gate.min, n_gate.max, n_gate.divs + 1)
+    alpha = (1e3 * 0.01 * (10 - 1e3 * (v - (EREST_ACT))) /
+             (np.exp((10 - 1e3 * (v - (EREST_ACT)))/10) - 1))
+    beta = 1e3 * 0.125 * np.exp(-1e3 * (v - (EREST_ACT)) / 80)
     plt.subplot(211)
-    plt.plot(v, n_alpha / (n_alpha + n_beta))
+    plt.plot(v, n_gate.tableA / n_gate.tableB, label='inf_n moose')
+    plt.plot(v, alpha/(alpha+beta), '--', label='inf_n numpy')
+    plt.legend()
     plt.subplot(212)
-    plt.plot(v, 1 / (n_alpha + n_beta))
+    plt.plot(v, 1 / n_gate.tableB, label='tau_n moose')
+    plt.plot(v, 1/(alpha+beta), '--', label='tau_n numpy')
+    plt.legend()
     plt.show()
-    plt.close()
     k.tick = -1
     return k
 
@@ -137,23 +150,8 @@ def test_channel_gates():
 
     """
     lib = moose.Neutral('/library')
-    na_proto = create_na_chan(parent=lib.path)
-    k_proto = create_k_chan(parent=lib.path)
-    m = moose.element(f'{na_proto.path}/gateX')
-    h = moose.element(f'{na_proto.path}/gateY')
-    n = moose.element(f'{k_proto.path}/gateX')
-    v = np.linspace(m.min, m.max, m.divs + 1)
-    plt.subplot(211)
-    plt.plot(v, 1 / m.tableB, label='tau_m')
-    plt.plot(v, 1 / h.tableB, label='tau_h')
-    plt.plot(v, 1 / n.tableB, label='tau_n')
-    plt.legend()
-    plt.subplot(212)
-    plt.plot(v, m.tableA / m.tableB, label='m_inf')
-    plt.plot(v, h.tableA / h.tableB, label='h_inf')
-    plt.plot(v, n.tableA / n.tableB, label='n_inf')
-    plt.legend()
-    plt.show()
+    na_proto = create_na_chan()
+    k_proto = create_k_chan()
 
 
 def create_passive_comp(
@@ -185,18 +183,20 @@ def create_hhcomp(
 
     """
     comp, sarea = create_passive_comp(parent, name, diameter, length)
-    if moose.exists(f'/library/na'):
-        na = moose.element(moose.copy('/library/na', comp.path, 'na'))
+    if moose.exists('/library/na'):
+        moose.copy('/library/na', comp.path, 'na')
     else:
-        na = create_na_chan(parent=comp.path)
+        create_na_chan(parent=comp.path)
+    na = moose.element('%s/na' % (comp.path))
     # Na-conductance 120 mS/cm^2
     na.Gbar = 120e-3 * sarea * 1e4
     na.Ek = 115e-3 + EREST_ACT
     moose.connect(comp, 'channel', na, 'channel')
     if moose.exists('/library/k'):
-        k = moose.element(moose.copy('/library/k', comp.path, 'k'))
+        moose.copy('/library/k', comp.path, 'k')
     else:
-        k = create_k_chan(parent=comp.path)
+        create_k_chan(parent=comp.path)
+    k = moose.element('%s/k' % (comp.path))
     # K-conductance 36 mS/cm^2
     k.Gbar = 36e-3 * sarea * 1e4
     k.Ek = -12e-3 + EREST_ACT
@@ -214,45 +214,47 @@ def test_hhcomp():
     model = moose.Neutral('/model')
     data = moose.Neutral('/data')
     comp, na, k = create_hhcomp(parent=model.path)
-    print(
-        'Setup compartment with:' f'Rm={comp.Rm}\n' f'Cm={comp.Cm}\n',
-        f'EK(Na)={na.Ek}\n'
-        f'Gbar(Na)={na.Gbar}\n'
-        f'EK(K)={k.Ek}\n'
-        f'Gbar(K)={k.Gbar}',
-    )
-
+    print((comp.Rm, comp.Cm, na.Ek, na.Gbar, k.Ek, k.Gbar))
     pg = moose.PulseGen('%s/pg' % (model.path))
     pg.firstDelay = 20e-3
     pg.firstWidth = 40e-3
     pg.firstLevel = 1e-9
     pg.secondDelay = 1e9
     moose.connect(pg, 'output', comp, 'injectMsg')
-    inj = moose.Table(f'{data.path}/pulse')
+    inj = moose.Table('%s/pulse' % (data.path))
     moose.connect(inj, 'requestOut', pg, 'getOutputValue')
-    vm = moose.Table(f'{data.path}/Vm')
+    vm = moose.Table('%s/Vm' % (data.path))
     moose.connect(vm, 'requestOut', comp, 'getVm')
-    gK = moose.Table(f'{data.path}/gK')
+    gK = moose.Table('%s/gK' % (data.path))
     moose.connect(gK, 'requestOut', k, 'getGk')
-    gNa = moose.Table(f'{data.path}/gNa')
+    gNa = moose.Table('%s/gNa' % (data.path))
     moose.connect(gNa, 'requestOut', na, 'getGk')
+    simdt = 1e-6
+    plotdt = 1e-4
     simtime = 100e-3
-    moose.reinit()
+    if 1:
+        moose.showmsg('/clock')
+        for i in range(8):
+            moose.setClock(i, simdt)
+        moose.setClock(8, plotdt)
+        moose.reinit()
+    else:
+        utils.resetSim([model.path, data.path], simdt, plotdt, simmethod='ee')
+        moose.showmsg('/clock')
     moose.start(simtime)
-    t = np.arange(len(vm.vector)) * vm.dt * 1e3
+    t = np.linspace(0, simtime, len(vm.vector))
     plt.subplot(211)
     plt.plot(t, vm.vector * 1e3, label='Vm (mV)')
     plt.plot(t, inj.vector * 1e9, label='injected (nA)')
-    plt.xlabel('Time (ms)')
     plt.legend()
     plt.title('Vm')
     plt.subplot(212)
     plt.title('Conductance (uS)')
     plt.plot(t, gK.vector * 1e6, label='K')
     plt.plot(t, gNa.vector * 1e6, label='Na')
-    plt.xlabel('Time (ms)')
     plt.legend()
     plt.show()
+    plt.close()
 
 
 def main():
